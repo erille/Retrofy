@@ -5,21 +5,21 @@ Test script to verify the security improvements work correctly.
 
 import bcrypt
 import os
+import secrets
 from dotenv import load_dotenv
 
 def test_password_hashing():
     """Test that password hashing works correctly."""
     print("Testing password hashing...")
     
-    # Test password
-    test_password = "test123"
+    sample_secret = secrets.token_bytes(24)
     
     # Generate hash
     salt = bcrypt.gensalt()
-    password_hash = bcrypt.hashpw(test_password.encode('utf-8'), salt)
+    password_hash = bcrypt.hashpw(sample_secret, salt)
     
     # Verify hash
-    is_valid = bcrypt.checkpw(test_password.encode('utf-8'), password_hash)
+    is_valid = bcrypt.checkpw(sample_secret, password_hash)
     
     if is_valid:
         print("✅ Password hashing works correctly")
@@ -49,23 +49,21 @@ def test_environment_variables():
     
     return admin_username != "legacy_admin"
 
-def test_default_password():
-    """Test that the default password works."""
-    print("\nTesting default password...")
-    
-    # Simulate the default password generation from app.py
-    default_password = "admin123"
+def test_random_fallback_hash():
+    """Test that a random fallback credential can be hashed and verified."""
+    print("\nTesting random fallback credential...")
+    random_credential = secrets.token_bytes(32)
     salt = bcrypt.gensalt()
-    default_hash = bcrypt.hashpw(default_password.encode('utf-8'), salt)
+    fallback_hash = bcrypt.hashpw(random_credential, salt)
     
     # Test verification
-    is_valid = bcrypt.checkpw(default_password.encode('utf-8'), default_hash)
+    is_valid = bcrypt.checkpw(random_credential, fallback_hash)
     
     if is_valid:
-        print("✅ Default password works correctly")
-        print(f"Default hash: {default_hash.decode('utf-8')}")
+        print("✅ Random fallback credential works correctly")
+        print(f"Fallback hash generated: {bool(fallback_hash)}")
     else:
-        print("❌ Default password verification failed")
+        print("❌ Random fallback credential verification failed")
     
     return is_valid
 
@@ -77,7 +75,7 @@ def main():
     tests = [
         test_password_hashing,
         test_environment_variables,
-        test_default_password
+        test_random_fallback_hash
     ]
     
     results = []

@@ -42,6 +42,22 @@ INVENTORY_COLUMNS = (
     "id", "artist", "album_title", "year", "label", "catalog_number",
     "format", "country", "notes", "price", "currency",
 )
+INVENTORY_SELECT = ", ".join(INVENTORY_COLUMNS)
+INVENTORY_ORDER_EXPRESSION = """CASE ?
+    WHEN 'id' THEN id
+    WHEN 'artist' THEN artist
+    WHEN 'album_title' THEN album_title
+    WHEN 'year' THEN year
+    WHEN 'label' THEN label
+    WHEN 'catalog_number' THEN catalog_number
+    WHEN 'format' THEN format
+    WHEN 'country' THEN country
+    WHEN 'notes' THEN notes
+    WHEN 'price' THEN price
+    WHEN 'currency' THEN currency
+    ELSE id END"""
+INVENTORY_ORDER_ASC = f" ORDER BY {INVENTORY_ORDER_EXPRESSION} ASC LIMIT ? OFFSET ?"
+INVENTORY_ORDER_DESC = f" ORDER BY {INVENTORY_ORDER_EXPRESSION} DESC LIMIT ? OFFSET ?"
 INVENTORY_FILTER_COLUMNS = {
     "artist_filter": "artist",
     "album_filter": "album_title",
@@ -368,9 +384,9 @@ def fetch_inventory_page(db: sqlite3.Connection, page: int, per_page: int) -> Tu
     where_clause, params = build_filter_clause(filters)
     total = db.execute("SELECT COUNT(*) AS total FROM records" + where_clause, params).fetchone()["total"]
     sort_by, _, direction = inventory_sort()
-    selected_columns = ", ".join(INVENTORY_COLUMNS)
-    sql = f"SELECT {selected_columns} FROM records{where_clause} ORDER BY {sort_by} {direction} LIMIT ? OFFSET ?"
-    rows = db.execute(sql, [*params, per_page, (page - 1) * per_page]).fetchall()
+    order_clause = INVENTORY_ORDER_ASC if direction == "ASC" else INVENTORY_ORDER_DESC
+    sql = "SELECT " + INVENTORY_SELECT + " FROM records" + where_clause + order_clause
+    rows = db.execute(sql, [*params, sort_by, per_page, (page - 1) * per_page]).fetchall()
     return rows, total
 
 
