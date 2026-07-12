@@ -11,8 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd --system retrofy \
     && useradd --system --gid retrofy --home-dir /app retrofy
 
-COPY requirements.txt /app/
-RUN pip install --only-binary=:all: -r requirements.txt
+COPY requirements.lock /app/
+RUN pip install --only-binary=:all: --require-hashes -r requirements.lock
 
 COPY app.py /app/
 COPY templates /app/templates
