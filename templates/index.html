@@ -25,6 +25,7 @@
         <a href="{{ url_for('index') }}" class="btn btn-secondary">Réinitialiser</a>
         {% if session.get('user') %}
           <form method="post" action="{{ url_for('logout') }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-secondary">Se déconnecter</button>
           </form>
         {% endif %}
@@ -67,5 +68,4 @@
   {% endfor %}
 </div>
 {% endblock %}
-
 

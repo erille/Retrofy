@@ -81,7 +81,7 @@ docker compose up --build -d
 http://localhost:8888
 ```
 
-En production, vérifiez que les variables `SECRET_KEY`, `ADMIN_USERNAME` et `ADMIN_PASSWORD_HASH` sont injectées dans le conteneur au runtime. Si `ADMIN_PASSWORD_HASH` est absent, l'application génère un hash pour le mot de passe par défaut `admin123`, ce qui ne doit pas être utilisé en production.
+En production, vérifiez que les variables `SECRET_KEY`, `ADMIN_USERNAME` et `ADMIN_PASSWORD_HASH` sont injectées dans le conteneur au runtime. Si un secret manque hors Docker, l'application en génère un aléatoire et aucun mot de passe administrateur connu n'est utilisable. Docker Compose exige explicitement `SECRET_KEY` au démarrage.
 
 ## Configuration
 
@@ -89,7 +89,7 @@ En production, vérifiez que les variables `SECRET_KEY`, `ADMIN_USERNAME` et `AD
 | --- | --- | --- |
 | `DB_PATH` | `/srv/sqlite/ma_base.sqlite` | Chemin vers la base SQLite. |
 | `IMAGES_DIR` | `/data/images` dans Docker | Dossier de stockage des pochettes. |
-| `SECRET_KEY` | `please-change-me` dans Docker | Clé de session Flask. A changer impérativement. |
+| `SECRET_KEY` | obligatoire avec Docker Compose | Clé de session Flask, longue et aléatoire. |
 | `ADMIN_USERNAME` | `admin` | Identifiant administrateur. |
 | `ADMIN_PASSWORD_HASH` | vide | Hash bcrypt du mot de passe administrateur. |
 | `SPOTIFY_CLIENT_ID` | vide | Client ID Spotify, optionnel. |

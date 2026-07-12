@@ -104,7 +104,7 @@ def test_function_structure():
     # Test the function
     records, images_map = mock_get_random_records_with_covers(limit=30)
     
-    print(f"✅ Function returns correct types")
+    print("✅ Function returns correct types")
     print(f"✅ Records count: {len(records)}")
     print(f"✅ Images map count: {len(images_map)}")
     print(f"✅ All records have corresponding images: {len(records) == len(images_map)}")
@@ -112,7 +112,7 @@ def test_function_structure():
     # Verify structure
     if records and images_map:
         print(f"✅ First record: {records[0]}")
-        print(f"✅ First image: {list(images_map.values())[0]}")
+        print(f"✅ First image: {next(iter(images_map.values()))}")
         return True
     else:
         print("❌ Function returned empty results")
@@ -187,4 +187,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

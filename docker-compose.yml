@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   retrofy:
     build: .
@@ -8,12 +7,11 @@ services:
     environment:
       - DB_PATH=/srv/sqlite/ma_base.sqlite
       - IMAGES_DIR=/data/images
-      - SECRET_KEY=${SECRET_KEY:-please-change-me}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set}
+      - HOST=0.0.0.0
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
     volumes:
       - /srv/sqlite:/srv/sqlite:Z
       - /srv/retrofy_images:/data/images:Z
     restart: unless-stopped
-
-

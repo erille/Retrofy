@@ -1,5 +1,8 @@
 import os
+import secrets
 import sqlite3
+import csv
+import io
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -17,6 +20,7 @@ from flask import (
     session,
     url_for,
 )
+from flask_wtf.csrf import CSRFProtect
 import json
 import requests
 import bcrypt
@@ -31,18 +35,41 @@ load_dotenv()
 # Configuration
 DB_PATH = os.environ.get("DB_PATH", "/srv/sqlite/ma_base.sqlite")
 IMAGES_DIR = os.environ.get("IMAGES_DIR", os.path.join(os.getcwd(), "images"))
-SECRET_KEY = os.environ.get("SECRET_KEY", "change-me-secret-key")
+SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+SQL_WHERE = " WHERE "
+SQL_AND = " AND "
+INVENTORY_COLUMNS = (
+    "id", "artist", "album_title", "year", "label", "catalog_number",
+    "format", "country", "notes", "price", "currency",
+)
+INVENTORY_FILTER_COLUMNS = {
+    "artist_filter": "artist",
+    "album_filter": "album_title",
+    "year_filter": "year",
+    "label_filter": "label",
+    "catalog_filter": "catalog_number",
+}
+EXPORT_FIELDS = (
+    "id", "artist", "album_title", "year", "label", "catalog_number", "format", "country",
+    "barcode", "matrix_runout", "genre", "style", "media_condition", "sleeve_condition",
+    "location", "quantity", "notes", "price", "currency", "source", "acquired_date",
+    "purchase_price", "created_at", "updated_at", "artiste_id", "storage", "discogsid",
+)
+EXPORT_HEADERS = (
+    "ID", "Artiste", "Album", "Année", "Label", "N° Catalogue", "Format", "Pays",
+    "Code-barres", "Matrix/Runout", "Genre", "Style", "État Media", "État Pochette",
+    "Localisation", "Quantité", "Notes", "Prix", "Devise", "Source", "Date Acquisition",
+    "Prix Achat", "Date Création", "Date Modification", "ID Artiste", "Stockage", "Discogs ID",
+)
 
 # User authentication configuration
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH", "")
 
-# Generate a default password hash if none is provided
+# Generate a random development credential if none is provided. Production must
+# always inject ADMIN_PASSWORD_HASH; no known fallback password is created.
 if not ADMIN_PASSWORD_HASH:
-    # Default password: "admin123" - CHANGE THIS IN PRODUCTION!
-    default_password = "admin123"
-    salt = bcrypt.gensalt()
-    ADMIN_PASSWORD_HASH = bcrypt.hashpw(default_password.encode('utf-8'), salt).decode('utf-8')
+    ADMIN_PASSWORD_HASH = bcrypt.hashpw(secrets.token_bytes(32), bcrypt.gensalt()).decode("utf-8")
 
 # Spotify configuration
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "")
@@ -72,6 +99,7 @@ def create_app() -> Flask:
         if db is not None:
             db.close()
 
+    CSRFProtect(app)
     register_routes(app)
     return app
 
@@ -298,12 +326,84 @@ def fetch_caa_image(kind: str, mbid: str) -> Optional[bytes]:
 
 
 def save_image_bytes(content: bytes, suggested_name: str, record_id: int) -> str:
-    base_name = f"record_{record_id}_" + suggested_name
-    safe_name = base_name.replace("/", "_").replace("\\", "_")
-    path = os.path.join(IMAGES_DIR, safe_name)
+    extension = os.path.splitext(suggested_name)[1].lower()
+    if extension not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+        extension = ".jpg"
+    safe_name = f"record_{record_id}_{secrets.token_hex(16)}{extension}"
+    images_root = os.path.realpath(IMAGES_DIR)
+    path = os.path.realpath(os.path.join(images_root, safe_name))
+    if os.path.commonpath((images_root, path)) != images_root:
+        raise ValueError("Invalid image path")
     with open(path, "wb") as f:
         f.write(content)
     return safe_name
+
+
+def get_inventory_filters() -> Dict[str, str]:
+    return {name: request.args.get(name, "") for name in INVENTORY_FILTER_COLUMNS}
+
+
+def build_filter_clause(filters: Dict[str, str]) -> Tuple[str, List[str]]:
+    clauses = []
+    params = []
+    for name, column in INVENTORY_FILTER_COLUMNS.items():
+        if filters[name]:
+            clauses.append(f"{column} LIKE ?")
+            params.append(f"%{filters[name]}%")
+    where_clause = SQL_WHERE + SQL_AND.join(clauses) if clauses else ""
+    return where_clause, params
+
+
+def inventory_sort() -> Tuple[str, str, str]:
+    sort_by = request.args.get("sort", "id")
+    if sort_by not in INVENTORY_COLUMNS:
+        sort_by = "id"
+    requested_order = request.args.get("order", "asc").lower()
+    direction = "ASC" if requested_order == "asc" else "DESC"
+    return sort_by, requested_order, direction
+
+
+def fetch_inventory_page(db: sqlite3.Connection, page: int, per_page: int) -> Tuple[List[sqlite3.Row], int]:
+    filters = get_inventory_filters()
+    where_clause, params = build_filter_clause(filters)
+    total = db.execute("SELECT COUNT(*) AS total FROM records" + where_clause, params).fetchone()["total"]
+    sort_by, _, direction = inventory_sort()
+    selected_columns = ", ".join(INVENTORY_COLUMNS)
+    sql = f"SELECT {selected_columns} FROM records{where_clause} ORDER BY {sort_by} {direction} LIMIT ? OFFSET ?"
+    rows = db.execute(sql, [*params, per_page, (page - 1) * per_page]).fetchall()
+    return rows, total
+
+
+def json_export_response(records: List[sqlite3.Row]):
+    payload = [{field: record[field] for field in EXPORT_FIELDS} for record in records]
+    response = make_response(json.dumps(payload, ensure_ascii=False, indent=2))
+    response.headers["Content-Type"] = "application/json"
+    response.headers["Content-Disposition"] = "attachment; filename=retrofy_records.json"
+    return response
+
+
+def csv_export_response(records: List[sqlite3.Row]):
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(EXPORT_HEADERS)
+    writer.writerows([[record[field] or "" for field in EXPORT_FIELDS] for record in records])
+    response = make_response(output.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    response.headers["Content-Disposition"] = "attachment; filename=retrofy_records.csv"
+    return response
+
+
+def get_index_records(db: sqlite3.Connection, filters: Dict[str, Optional[str]]):
+    has_filters = any(filters.values())
+    if not has_filters:
+        records, images = get_random_records_with_covers(db, limit=30)
+        return records, images, False
+    records = query_records(db, **filters)
+    images = {}
+    for record in records:
+        image = get_record_image(db, record["id"])
+        images[record["id"]] = image["filename"] if image else None
+    return records, images, True
 
 
 def search_spotify_album(artist: str, album_title: str) -> Optional[Dict[str, Any]]:
@@ -349,7 +449,7 @@ def login_required() -> None:
         abort(403)
 
 
-def register_routes(app: Flask) -> None:
+def register_sidebar_context(app: Flask) -> None:
     @app.context_processor
     def inject_sidebar_data():
         try:
@@ -360,342 +460,75 @@ def register_routes(app: Flask) -> None:
             artists = []
             genres = []
             years = []
-        return dict(artist_counts=artists, genre_counts=genres, year_counts=years)
+        return {"artist_counts": artists, "genre_counts": genres, "year_counts": years}
 
+def register_core_routes(app: Flask) -> None:
     @app.get("/a-propos")
     def a_propos():
         return render_template("a_propos.html")
 
     @app.get("/")
     def index():
-        q = request.args.get("q")
-        artist = request.args.get("artist")
-        year = request.args.get("year")
-        genre = request.args.get("genre")
-        
-        # Check if any search filters are active
-        has_filters = any([q, artist, year, genre])
-        
-        if has_filters:
-            records = query_records(g.db, q=q, artist=artist, year=year, genre=genre)
-            # Preload image availability flags for search results
-            images_map: Dict[int, Optional[str]] = {}
-            for r in records:
-                img = get_record_image(g.db, r["id"])  # type: ignore[index]
-                images_map[r["id"]] = img["filename"] if img else None  # type: ignore[index]
-        else:
-            # Get 30 random records with cover images (optimized)
-            records, images_map = get_random_records_with_covers(g.db, limit=30)
-
-        # Get total records count for welcome page
+        filters = {name: request.args.get(name) for name in ("q", "artist", "year", "genre")}
+        records, images_map, has_filters = get_index_records(g.db, filters)
         records_count = get_records_count(g.db) if not has_filters else 0
 
         return render_template(
             "index.html",
             records=records,
             images_map=images_map,
-            q=q or "",
-            artist=artist or "",
-            year=year or "",
-            genre=genre or "",
+            **{name: value or "" for name, value in filters.items()},
             is_welcome=not has_filters,
             records_count=records_count,
         )
 
+def register_inventory_page(app: Flask) -> None:
     @app.get("/inventaire")
     def inventaire():
-        # Get sorting parameters
-        sort_by = request.args.get("sort", "id")
-        sort_order = request.args.get("order", "asc")
-        
-        # Get filter parameters
-        artist_filter = request.args.get("artist_filter", "")
-        album_filter = request.args.get("album_filter", "")
-        year_filter = request.args.get("year_filter", "")
-        label_filter = request.args.get("label_filter", "")
-        catalog_filter = request.args.get("catalog_filter", "")
-        
-        # Get pagination parameters
-        page = request.args.get("page", 1, type=int)
+        sort_by, sort_order, _ = inventory_sort()
+        filters = get_inventory_filters()
+        page = max(request.args.get("page", 1, type=int), 1)
         per_page = 100
-        offset = (page - 1) * per_page
-        
-        # Build the SQL query for total count
-        count_sql = "SELECT COUNT(*) as total FROM records"
-        count_clauses = []
-        count_params = []
-        
-        # Add filters to count query
-        if artist_filter:
-            count_clauses.append("artist LIKE ?")
-            count_params.append(f"%{artist_filter}%")
-        if album_filter:
-            count_clauses.append("album_title LIKE ?")
-            count_params.append(f"%{album_filter}%")
-        if year_filter:
-            count_clauses.append("year LIKE ?")
-            count_params.append(f"%{year_filter}%")
-        if label_filter:
-            count_clauses.append("label LIKE ?")
-            count_params.append(f"%{label_filter}%")
-        if catalog_filter:
-            count_clauses.append("catalog_number LIKE ?")
-            count_params.append(f"%{catalog_filter}%")
-        
-        if count_clauses:
-            count_sql += " WHERE " + " AND ".join(count_clauses)
-        
-        # Get total count
-        count_cursor = g.db.execute(count_sql, count_params)
-        total_records = count_cursor.fetchone()["total"]
+        records, total_records = fetch_inventory_page(g.db, page, per_page)
         total_pages = (total_records + per_page - 1) // per_page
-        
-        # Build the main SQL query
-        sql = "SELECT id, artist, album_title, year, label, catalog_number, format, country, notes, price, currency FROM records"
-        clauses = []
-        params = []
-        
-        # Add filters
-        if artist_filter:
-            clauses.append("artist LIKE ?")
-            params.append(f"%{artist_filter}%")
-        if album_filter:
-            clauses.append("album_title LIKE ?")
-            params.append(f"%{album_filter}%")
-        if year_filter:
-            clauses.append("year LIKE ?")
-            params.append(f"%{year_filter}%")
-        if label_filter:
-            clauses.append("label LIKE ?")
-            params.append(f"%{label_filter}%")
-        if catalog_filter:
-            clauses.append("catalog_number LIKE ?")
-            params.append(f"%{catalog_filter}%")
-        
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        
-        # Add sorting
-        valid_sort_columns = ["id", "artist", "album_title", "year", "label", "catalog_number", "format", "country", "notes", "price", "currency"]
-        if sort_by not in valid_sort_columns:
-            sort_by = "id"
-        
-        sort_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
-        sql += f" ORDER BY {sort_by} {sort_direction}"
-        
-        # Add pagination
-        sql += " LIMIT ? OFFSET ?"
-        params.extend([per_page, offset])
-        
-        # Execute query
-        cursor = g.db.execute(sql, params)
-        records = cursor.fetchall()
         
         return render_template(
             "inventaire.html",
             records=records,
             sort_by=sort_by,
             sort_order=sort_order,
-            artist_filter=artist_filter,
-            album_filter=album_filter,
-            year_filter=year_filter,
-            label_filter=label_filter,
-            catalog_filter=catalog_filter,
+            **filters,
             current_page=page,
             total_pages=total_pages,
             total_records=total_records,
             per_page=per_page,
         )
 
+def register_export_route(app: Flask) -> None:
     @app.get("/export")
     def export_records():
         format_type = request.args.get("format", "json")
-        artist_filter = request.args.get("artist_filter", "")
-        album_filter = request.args.get("album_filter", "")
-        year_filter = request.args.get("year_filter", "")
-        label_filter = request.args.get("label_filter", "")
-        catalog_filter = request.args.get("catalog_filter", "")
-
-        sql = "SELECT * FROM records"
-        clauses = []
-        params = []
-
-        if artist_filter:
-            clauses.append("artist LIKE ?")
-            params.append(f"%{artist_filter}%")
-        if album_filter:
-            clauses.append("album_title LIKE ?")
-            params.append(f"%{album_filter}%")
-        if year_filter:
-            clauses.append("year LIKE ?")
-            params.append(f"%{year_filter}%")
-        if label_filter:
-            clauses.append("label LIKE ?")
-            params.append(f"%{label_filter}%")
-        if catalog_filter:
-            clauses.append("catalog_number LIKE ?")
-            params.append(f"%{catalog_filter}%")
-
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-
-        sql += " ORDER BY id ASC"
+        where_clause, params = build_filter_clause(get_inventory_filters())
+        sql = "SELECT * FROM records" + where_clause + " ORDER BY id ASC"
 
         cursor = g.db.execute(sql, params)
         records = cursor.fetchall()
 
         if format_type == "json":
-            # Convert records to list of dictionaries
-            records_list = []
-            for record in records:
-                records_list.append({
-                    'id': record['id'],
-                    'artist': record['artist'],
-                    'album_title': record['album_title'],
-                    'year': record['year'],
-                    'label': record['label'],
-                    'catalog_number': record['catalog_number'],
-                    'format': record['format'],
-                    'country': record['country'],
-                    'barcode': record['barcode'],
-                    'matrix_runout': record['matrix_runout'],
-                    'genre': record['genre'],
-                    'style': record['style'],
-                    'media_condition': record['media_condition'],
-                    'sleeve_condition': record['sleeve_condition'],
-                    'location': record['location'],
-                    'quantity': record['quantity'],
-                    'notes': record['notes'],
-                    'price': record['price'],
-                    'currency': record['currency'],
-                    'source': record['source'],
-                    'acquired_date': record['acquired_date'],
-                    'purchase_price': record['purchase_price'],
-                    'created_at': record['created_at'],
-                    'updated_at': record['updated_at'],
-                    'artiste_id': record['artiste_id'],
-                    'storage': record['storage'],
-                    'discogsid': record['discogsid']
-                })
-            
-            response = make_response(json.dumps(records_list, ensure_ascii=False, indent=2))
-            response.headers['Content-Type'] = 'application/json'
-            response.headers['Content-Disposition'] = 'attachment; filename=retrofy_records.json'
-            return response
+            return json_export_response(records)
         
-        elif format_type == "csv":
-            import csv
-            import io
-            
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # Write header with all fields
-            writer.writerow([
-                'ID', 'Artiste', 'Album', 'Année', 'Label', 'N° Catalogue', 'Format', 'Pays', 
-                'Code-barres', 'Matrix/Runout', 'Genre', 'Style', 'État Media', 'État Pochette', 
-                'Localisation', 'Quantité', 'Notes', 'Prix', 'Devise', 'Source', 'Date Acquisition', 
-                'Prix Achat', 'Date Création', 'Date Modification', 'ID Artiste', 'Stockage', 'Discogs ID'
-            ])
-            
-            # Write data
-            for record in records:
-                writer.writerow([
-                    record['id'],
-                    record['artist'] or '',
-                    record['album_title'] or '',
-                    record['year'] or '',
-                    record['label'] or '',
-                    record['catalog_number'] or '',
-                    record['format'] or '',
-                    record['country'] or '',
-                    record['barcode'] or '',
-                    record['matrix_runout'] or '',
-                    record['genre'] or '',
-                    record['style'] or '',
-                    record['media_condition'] or '',
-                    record['sleeve_condition'] or '',
-                    record['location'] or '',
-                    record['quantity'] or '',
-                    record['notes'] or '',
-                    record['price'] or '',
-                    record['currency'] or '',
-                    record['source'] or '',
-                    record['acquired_date'] or '',
-                    record['purchase_price'] or '',
-                    record['created_at'] or '',
-                    record['updated_at'] or '',
-                    record['artiste_id'] or '',
-                    record['storage'] or '',
-                    record['discogsid'] or ''
-                ])
-            
-            response = make_response(output.getvalue())
-            response.headers['Content-Type'] = 'text/csv; charset=utf-8'
-            response.headers['Content-Disposition'] = 'attachment; filename=retrofy_records.csv'
-            return response
+        if format_type == "csv":
+            return csv_export_response(records)
         
         else:
             abort(400, "Format non supporté. Utilisez 'json' ou 'csv'.")
 
+def register_inventory_api(app: Flask) -> None:
     @app.get("/api/inventaire")
     def api_inventaire():
-        # Get sorting parameters
-        sort_by = request.args.get("sort", "id")
-        sort_order = request.args.get("order", "asc")
-        
-        # Get filter parameters
-        artist_filter = request.args.get("artist_filter", "")
-        album_filter = request.args.get("album_filter", "")
-        year_filter = request.args.get("year_filter", "")
-        label_filter = request.args.get("label_filter", "")
-        catalog_filter = request.args.get("catalog_filter", "")
-        
-        # Get pagination parameters
-        page = request.args.get("page", 1, type=int)
+        page = max(request.args.get("page", 1, type=int), 1)
         per_page = 100
-        offset = (page - 1) * per_page
-        
-        # Build the SQL query
-        sql = "SELECT id, artist, album_title, year, label, catalog_number, format, country, notes, price, currency FROM records"
-        clauses = []
-        params = []
-        
-        # Add filters
-        if artist_filter:
-            clauses.append("artist LIKE ?")
-            params.append(f"%{artist_filter}%")
-        if album_filter:
-            clauses.append("album_title LIKE ?")
-            params.append(f"%{album_filter}%")
-        if year_filter:
-            clauses.append("year LIKE ?")
-            params.append(f"%{year_filter}%")
-        if label_filter:
-            clauses.append("label LIKE ?")
-            params.append(f"%{label_filter}%")
-        if catalog_filter:
-            clauses.append("catalog_number LIKE ?")
-            params.append(f"%{catalog_filter}%")
-        
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        
-        # Add sorting
-        valid_sort_columns = ["id", "artist", "album_title", "year", "label", "catalog_number", "format", "country", "notes", "price", "currency"]
-        if sort_by not in valid_sort_columns:
-            sort_by = "id"
-        
-        sort_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
-        sql += f" ORDER BY {sort_by} {sort_direction}"
-        
-        # Add pagination
-        sql += " LIMIT ? OFFSET ?"
-        params.extend([per_page, offset])
-        
-        # Execute query
-        cursor = g.db.execute(sql, params)
-        records = cursor.fetchall()
+        records, _ = fetch_inventory_page(g.db, page, per_page)
         
         # Convert to list of dictionaries
         records_list = []
@@ -723,6 +556,7 @@ def register_routes(app: Flask) -> None:
             'has_more': len(records_list) == per_page
         })
 
+def register_record_routes(app: Flask) -> None:
     @app.get("/records/<int:record_id>")
     def record_detail(record_id: int):
         rec = get_record(g.db, record_id)
@@ -775,6 +609,7 @@ def register_routes(app: Flask) -> None:
         favicon_dir = "/data/images"  # This is the mounted directory in the container
         return send_from_directory(favicon_dir, filename)
 
+def register_auth_routes(app: Flask) -> None:
     @app.get("/login")
     def login_form():
         return render_template("login.html")
@@ -800,6 +635,7 @@ def register_routes(app: Flask) -> None:
         flash("Déconnecté.", "success")
         return redirect(url_for("index"))
 
+def register_edit_route(app: Flask) -> None:
     @app.post("/records/<int:record_id>/edit")
     def edit_record(record_id: int):
         login_required()
@@ -848,10 +684,19 @@ def register_routes(app: Flask) -> None:
         return redirect(url_for("record_detail", record_id=rec["id"]))  # type: ignore[index]
 
 
+def register_routes(app: Flask) -> None:
+    register_sidebar_context(app)
+    register_core_routes(app)
+    register_inventory_page(app)
+    register_export_route(app)
+    register_inventory_api(app)
+    register_record_routes(app)
+    register_auth_routes(app)
+    register_edit_route(app)
+
+
 app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8888, debug=True)
-
-
+    app.run(host=os.environ.get("HOST", "127.0.0.1"), port=8888, debug=False)

@@ -50,7 +50,7 @@ def test_spotify_search_function():
                 'id': 'mock_album_id',
                 'name': album_title,
                 'artist': artist,
-                'external_url': f'https://open.spotify.com/album/mock_album_id',
+                'external_url': 'https://open.spotify.com/album/mock_album_id',
                 'images': []
             }
         

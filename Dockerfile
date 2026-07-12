@@ -7,19 +7,24 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates && rm -rf /var/lib/apt/lists/*
+    curl ca-certificates && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system retrofy \
+    && useradd --system --gid retrofy --home-dir /app retrofy
 
 COPY requirements.txt /app/
-RUN pip install -r requirements.txt
+RUN pip install --only-binary=:all: -r requirements.txt
 
-COPY . /app
+COPY app.py /app/
+COPY templates /app/templates
+COPY static /app/static
 
 EXPOSE 8888
 
 ENV DB_PATH=/srv/sqlite/ma_base.sqlite \
-    IMAGES_DIR=/data/images \
-    SECRET_KEY=please-change-me
+    IMAGES_DIR=/data/images
+
+RUN mkdir -p /data/images /srv/sqlite && chown -R retrofy:retrofy /app /data/images /srv/sqlite
+
+USER retrofy
 
 CMD ["python", "app.py"]
-
-

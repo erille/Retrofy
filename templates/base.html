@@ -13,7 +13,6 @@
     <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('serve_favicon', filename='android-chrome-192x192.png') }}">
     <link rel="icon" type="image/png" sizes="512x512" href="{{ url_for('serve_favicon', filename='android-chrome-512x512.png') }}">
     
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.min.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
@@ -73,7 +72,7 @@
                     </a>
                 </div>
 
-                <nav class="nav-block" x-nav>
+                <nav class="nav-block" x-nav aria-label="Navigation par artistes">
                     <button class="nav-title" data-toggle="#nav-artistes">Artistes</button>
                     <ul id="nav-artistes" class="nav-list">
                         {% for a in artist_counts %}
@@ -87,7 +86,7 @@
                     </ul>
                 </nav>
 
-                <nav class="nav-block" x-nav>
+                <nav class="nav-block" x-nav aria-label="Navigation par genres">
                     <button class="nav-title" data-toggle="#nav-genres">Genres</button>
                     <ul id="nav-genres" class="nav-list">
                         {% for g in genre_counts %}
@@ -101,7 +100,7 @@
                     </ul>
                 </nav>
 
-                <nav class="nav-block" x-nav>
+                <nav class="nav-block" x-nav aria-label="Navigation par années">
                     <button class="nav-title" data-toggle="#nav-years">Années</button>
                     <ul id="nav-years" class="nav-list">
                         {% for y in year_counts %}
@@ -120,7 +119,7 @@
             document.addEventListener('DOMContentLoaded', function(){
               document.querySelectorAll('[x-nav] .nav-title').forEach(function(btn){
                 btn.addEventListener('click', function(){
-                  var id = btn.getAttribute('data-toggle');
+                  var id = btn.dataset.toggle;
                   var el = document.querySelector(id);
                   if(el){ el.classList.toggle('collapsed'); }
                 });
@@ -155,6 +154,14 @@
 
     <!-- Mobile JavaScript -->
     <script>
+    function toggleExportMenu(menu) {
+        if (menu) menu.classList.toggle('show');
+    }
+
+    function closeExportMenus(...menus) {
+        menus.filter(Boolean).forEach(function(menu) { menu.classList.remove('show'); });
+    }
+
     document.addEventListener('DOMContentLoaded', function(){
         // Mobile search toggle
         const searchToggle = document.getElementById('mobile-search-toggle');
@@ -172,12 +179,10 @@
                     
                     if (filtersToToggle.classList.contains('show')) {
                         searchToggle.textContent = '✕ Fermer';
+                    } else if (mobileInventaireFilters) {
+                        searchToggle.textContent = '🔍 Filtres';
                     } else {
-                        if (mobileInventaireFilters) {
-                            searchToggle.textContent = '🔍 Filtres';
-                        } else {
-                            searchToggle.textContent = '🔍 Recherche';
-                        }
+                        searchToggle.textContent = '🔍 Recherche';
                     }
                 }
             });
@@ -188,17 +193,6 @@
         const mobileExportBtn = document.getElementById('mobile-export-btn');
         const exportMenu = document.getElementById('export-menu');
         const mobileExportMenu = document.getElementById('mobile-export-menu');
-
-        function toggleExportMenu(menu) {
-            if (menu) {
-                menu.classList.toggle('show');
-            }
-        }
-
-        function closeExportMenus() {
-            if (exportMenu) exportMenu.classList.remove('show');
-            if (mobileExportMenu) mobileExportMenu.classList.remove('show');
-        }
 
         if (exportBtn) {
             exportBtn.addEventListener('click', function(e) {
@@ -216,7 +210,7 @@
 
         // Close dropdown when clicking outside
         document.addEventListener('click', function() {
-            closeExportMenus();
+            closeExportMenus(exportMenu, mobileExportMenu);
         });
 
         // Prevent closing when clicking inside the dropdown
@@ -235,5 +229,4 @@
     </script>
 </body>
 </html>
-
 

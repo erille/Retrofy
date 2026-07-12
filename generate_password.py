@@ -33,13 +33,13 @@ def generate_password_hash():
     print("\n" + "=" * 40)
     print("PASSWORD HASH GENERATED")
     print("=" * 40)
-    print(f"Username: admin")
+    print("Username: admin")
     print(f"Password Hash: {password_hash.decode('utf-8')}")
     print("\nAdd these to your .env file:")
-    print(f"ADMIN_USERNAME=admin")
+    print("ADMIN_USERNAME=admin")
     print(f"ADMIN_PASSWORD_HASH={password_hash.decode('utf-8')}")
     print("\nOr set as environment variables:")
-    print(f"export ADMIN_USERNAME=admin")
+    print("export ADMIN_USERNAME=admin")
     print(f"export ADMIN_PASSWORD_HASH={password_hash.decode('utf-8')}")
 
 if __name__ == "__main__":
